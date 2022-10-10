@@ -14,7 +14,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -38,9 +37,11 @@ import timber.log.Timber
 
 class MainActivity : ComponentActivity() {
 
+    private var isBleDeviceConnecting = mutableStateOf(false)
     private var isScanning = mutableStateOf(false)
 
     private var listOfBleDevices = mutableStateListOf<ScanResult>()
+    private var listOfCharacteristics = mutableStateListOf<BluetoothGattCharacteristic>()
 
     //bluetoothAdapter.isEnabled returns false when bluetooth is off
     private val bluetoothAdapter: BluetoothAdapter by lazy {
@@ -55,10 +56,6 @@ class MainActivity : ComponentActivity() {
     private val scanSettings = ScanSettings.Builder()
         .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
         .build()
-
-    private var listOfCharacteristics = mutableStateListOf<BluetoothGattCharacteristic>()
-    private var isBleDeviceIsConnecting = mutableStateOf(false)
-
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -117,7 +114,7 @@ class MainActivity : ComponentActivity() {
                                         /*connectBleDevice(bluetoothDevice)*/
                                     }
                                 },
-                                isBleDeviceIsConnecting = isBleDeviceIsConnecting
+                                isBleDeviceIsConnecting = isBleDeviceConnecting
                             )
                         } else {
                             BluetoothDeviceCharacteristicsScreen(listOfCharacteristics)
@@ -128,6 +125,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+
     fun scanBleDevices() {
         if (isScanning.value) {
             stopBleScan()
@@ -135,6 +133,7 @@ class MainActivity : ComponentActivity() {
             startBleScan()
         }
     }
+
 
     private fun startBleScan() {
         listOfBleDevices.clear()
@@ -144,6 +143,7 @@ class MainActivity : ComponentActivity() {
             isScanning.value = true
         }
     }
+
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -156,23 +156,17 @@ class MainActivity : ComponentActivity() {
                 listOfBleDevices[listOfBleDevices.indexOf(scanResult)] = result
             } else {
                 with(result.device) {
-                    Log.d(
-                        "onScanResult",
-                        "Found BLE device! Name: ${name ?: "Unnamed"}, address: $address"
-                    )
+                    Timber.d("Found BLE device! Name: ${name ?: "Unnamed"}, address: $address")
                 }
 
                 listOfBleDevices.add(result)
-                /*GlobalScope.launch {
-                    listOfBleDevices.first().device.logGattServices()
-                }*/
             }
 
             isScanning.value = false
         }
 
         override fun onScanFailed(errorCode: Int) {
-            Log.e("onScanFailed", ": code $errorCode")
+            Timber.e("onScanFailed : code $errorCode")
             isScanning.value = false
 
             stopBleScan()
@@ -180,14 +174,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+
     private fun stopBleScan() {
         bleScanner.stopScan(scanCallback)
         isScanning.value = false
     }
 
-    suspend fun BluetoothDevice.logGattServices(tag: String = "BleGattCoroutines") {
 
-        isBleDeviceIsConnecting.value = true
+    //Connect the ble devices and load the characteristics
+    private suspend fun BluetoothDevice.logGattServices() {
+
+        isBleDeviceConnecting.value = true
         val deviceConnection = GattConnection(bluetoothDevice = this@logGattServices)
 
         Timber.d("deviceConnection $deviceConnection")
@@ -200,13 +197,13 @@ class MainActivity : ComponentActivity() {
 
             Timber.d("deviceConnection.discoverServices()")
 
-            gattServices.forEach {
+            gattServices.forEach { bluetoothGattService ->
 
-                Timber.d("forEach ${it.characteristics}")
+                Timber.d("forEach ${bluetoothGattService.characteristics}")
 
-                it.characteristics.forEach {
+                bluetoothGattService.characteristics.forEach { bluetoothGattCharacteristic ->
                     try {
-                        deviceConnection.readCharacteristic(it) // Suspends until characteristic is
+                        deviceConnection.readCharacteristic(bluetoothGattCharacteristic) // Suspends until characteristic is
 
                         /*if (it.uuid == HEART_RATE_SERVICE_UUID || it.uuid == HEART_RATE_MEASUREMENT_CHAR_UUID || it.uuid == HEART_RATE_CONTROL_POINT_CHAR_UUID) {
 
@@ -217,11 +214,11 @@ class MainActivity : ComponentActivity() {
                         }*/
 
 
-                        val messageBytes: ByteArray = it.getValue()
+                        val messageBytes: ByteArray = bluetoothGattCharacteristic.value
 
                         Timber.d("messageBytes -> $messageBytes")
 
-                        listOfCharacteristics.add(it)
+                        listOfCharacteristics.add(bluetoothGattCharacteristic)
                         listOfCharacteristics.distinctBy {
                             it.uuid
                         }.let {
@@ -230,14 +227,14 @@ class MainActivity : ComponentActivity() {
                         }
 
                     } catch (e: Exception) {
-                        Timber.e("Couldn't read characteristic with uuid: ${it.uuid}")
+                        Timber.e("Couldn't read characteristic with uuid: ${bluetoothGattCharacteristic.uuid}")
                     }
                 }
             }
         } finally {
             deviceConnection.close() // Close when no longer used. Also triggers disconnect by default.
             Timber.d("logGattServices close")
-            isBleDeviceIsConnecting.value = false
+            isBleDeviceConnecting.value = false
         }
     }
 
@@ -276,11 +273,11 @@ class MainActivity : ComponentActivity() {
 
             val gattCharacteristicGroupData: ArrayList<HashMap<String, String>> = arrayListOf()
             val gattCharacteristics = gattService.characteristics
-            val charas: MutableList<BluetoothGattCharacteristic> = mutableListOf()
+            val chars: MutableList<BluetoothGattCharacteristic> = mutableListOf()
 
             // Loops through available Characteristics.
             gattCharacteristics.forEach { gattCharacteristic ->
-                charas += gattCharacteristic
+                chars += gattCharacteristic
                 val currentCharaData: HashMap<String, String> = hashMapOf()
                 uuid = gattCharacteristic.uuid.toString()
                 currentCharaData[nameCharacteristic] =
@@ -297,7 +294,7 @@ class MainActivity : ComponentActivity() {
                     "currentCharaData uuidCharacteristic -> ${currentCharaData[uuidCharacteristic]}"
                 )
             }
-            mGattCharacteristics += charas
+            mGattCharacteristics += chars
             gattCharacteristicData += gattCharacteristicGroupData
         }
     }*/

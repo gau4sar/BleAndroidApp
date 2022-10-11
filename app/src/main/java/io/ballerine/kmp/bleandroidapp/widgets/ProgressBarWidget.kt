@@ -1,4 +1,4 @@
-package io.ballerine.kmp.bleandroidapp.utils
+package io.ballerine.kmp.bleandroidapp.widgets
 
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.CircularProgressIndicator

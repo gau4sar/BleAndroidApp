@@ -1,35 +1,35 @@
 package io.ballerine.kmp.bleandroidapp.screens
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
-import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
-import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.ViewModelProvider
 import com.beepiz.bluetooth.gattcoroutines.GattConnection
+import com.google.accompanist.navigation.animation.AnimatedNavHost
+import com.google.accompanist.navigation.animation.rememberAnimatedNavController
+import io.ballerine.kmp.bleandroidapp.screens.navigations.HomeScreenItems
+import io.ballerine.kmp.bleandroidapp.screens.viewmodels.HomeViewModel
 import io.ballerine.kmp.bleandroidapp.ui.theme.BleAndroidAppTheme
-import io.ballerine.kmp.bleandroidapp.utils.SimpleProgressBar
+import io.ballerine.kmp.bleandroidapp.utils.customAnimatedComposable
 import io.ballerine.kmp.bleandroidapp.utils.hasPermission
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
@@ -37,11 +37,7 @@ import timber.log.Timber
 
 class MainActivity : ComponentActivity() {
 
-    private var isBleDeviceConnecting = mutableStateOf(false)
-    private var isScanning = mutableStateOf(false)
-
-    private var listOfBleDevices = mutableStateListOf<ScanResult>()
-    private var listOfCharacteristics = mutableStateListOf<BluetoothGattCharacteristic>()
+    lateinit var homeViewModel: HomeViewModel
 
     //bluetoothAdapter.isEnabled returns false when bluetooth is off
     private val bluetoothAdapter: BluetoothAdapter by lazy {
@@ -53,12 +49,13 @@ class MainActivity : ComponentActivity() {
         bluetoothAdapter.bluetoothLeScanner
     }
 
-    private val scanSettings = ScanSettings.Builder()
-        .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-        .build()
-
+    @SuppressLint("MissingPermission")
+    @OptIn(ExperimentalAnimationApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        homeViewModel = ViewModelProvider(this)[HomeViewModel::class.java]
+
         setContent {
             BleAndroidAppTheme {
 
@@ -69,55 +66,71 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                Column(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally
+                val navController = rememberAnimatedNavController()
+
+                AnimatedNavHost(
+                    navController,
+                    startDestination = HomeScreenItems.HomeScreen.route
                 ) {
-                    if (isScanning.value) {
 
-                        SimpleProgressBar()
-                    } else {
+                    customAnimatedComposable(HomeScreenItems.HomeScreen.route) {
 
-                        if (listOfCharacteristics.isEmpty()) {
-                            BluetoothDevicesListScreen(
-                                listOfBleDevices = listOfBleDevices,
-                                gotoSettings = {
+                        BluetoothDevicesListScreen(
+                            isScanning = homeViewModel.isScanningInProgress.value,
+                            listOfBleDevices = homeViewModel.listOfBleDevices,
+                            gotoSettings = {
 
-                                    val intent =
-                                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                                    val uri: Uri =
-                                        Uri.fromParts(
-                                            "package",
-                                            this@MainActivity.packageName,
-                                            null
-                                        )
-                                    intent.data = uri
-                                    ContextCompat.startActivity(this@MainActivity, intent, null)
-                                },
-                                scanDevices = {
+                                val intent =
+                                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                                val uri: Uri =
+                                    Uri.fromParts(
+                                        "package",
+                                        this@MainActivity.packageName,
+                                        null
+                                    )
+                                intent.data = uri
+                                ContextCompat.startActivity(this@MainActivity, intent, null)
+                            },
+                            scanDevices = {
 
-                                    if (!bluetoothAdapter.isEnabled) {
+                                if (!bluetoothAdapter.isEnabled) {
 
-                                        val enableBtIntent =
-                                            Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+                                    val enableBtIntent =
+                                        Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
 
-                                        startForResult.launch(enableBtIntent)
-                                    } else {
-                                        scanBleDevices()
-                                    }
-                                },
-                                onConnect = { bluetoothDevice ->
+                                    startForResult.launch(enableBtIntent)
+                                } else {
+                                    stopBleScan()
+                                    scanBleDevices()
+                                }
+                            },
+                            onBleDeviceClicked = { bluetoothDevice ->
+                                homeViewModel.selectedBleDevice = bluetoothDevice
+
+                                navController.navigate(HomeScreenItems.BluetoothDetailsScreen.route)
+                            }
+                        )
+                    }
+
+                    customAnimatedComposable(HomeScreenItems.BluetoothDetailsScreen.route) {
+
+                        if (homeViewModel.selectedBleDevice != null) {
+                            BluetoothDeviceCharacteristicsScreen(
+                                navController = navController,
+                                deviceName = homeViewModel.selectedBleDevice!!.name,
+                                homeViewModel.listOfCharacteristics,
+                                onConnectClick = {
                                     GlobalScope.launch {
-                                        bluetoothDevice.logGattServices()
-
-                                        /*connectBleDevice(bluetoothDevice)*/
+                                        homeViewModel.selectedBleDevice!!.logGattServices()
                                     }
                                 },
-                                isBleDeviceIsConnecting = isBleDeviceConnecting
+                                onDisconnect = {
+                                    deviceConnection!!.close()
+                                    listOfConnectedDevices.remove(homeViewModel.selectedBleDevice!!)
+                                },
+                                isConnected = listOfConnectedDevices.contains(homeViewModel.selectedBleDevice!!),
+                                isBleDeviceConnecting = homeViewModel.isBleDeviceConnecting.value
                             )
-                        } else {
-                            BluetoothDeviceCharacteristicsScreen(listOfCharacteristics)
                         }
                     }
                 }
@@ -127,7 +140,7 @@ class MainActivity : ComponentActivity() {
 
 
     fun scanBleDevices() {
-        if (isScanning.value) {
+        if (homeViewModel.isScanningInProgress.value) {
             stopBleScan()
         } else {
             startBleScan()
@@ -136,11 +149,12 @@ class MainActivity : ComponentActivity() {
 
 
     private fun startBleScan() {
-        listOfBleDevices.clear()
+        isAlreadyStopScanningIsCalled = false
+        homeViewModel.listOfBleDevices.clear()
 
         if (hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
-            bleScanner.startScan(null, scanSettings, scanCallback)
-            isScanning.value = true
+            bleScanner.startScan(null, homeViewModel.scanSettings, scanCallback)
+            homeViewModel.isScanningInProgress.value = true
         }
     }
 
@@ -148,52 +162,82 @@ class MainActivity : ComponentActivity() {
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
 
-            val scanResult = listOfBleDevices.find { it.device.address == result.device.address }
+            val scanResult =
+                homeViewModel.listOfBleDevices.find { it.device.address == result.device.address }
 
             if (scanResult != null) {
                 // A scan result already exists with the same address
 
-                listOfBleDevices[listOfBleDevices.indexOf(scanResult)] = result
+                homeViewModel.listOfBleDevices[homeViewModel.listOfBleDevices.indexOf(scanResult)] =
+                    result
+                stopScanning(10000L)
             } else {
                 with(result.device) {
                     Timber.d("Found BLE device! Name: ${name ?: "Unnamed"}, address: $address")
                 }
 
-                listOfBleDevices.add(result)
-            }
+                homeViewModel.listOfBleDevices.add(result)
+                /*homeViewModel.listOfBleDevices.add(result)
+                homeViewModel.listOfBleDevices.add(result)
+                homeViewModel.listOfBleDevices.add(result)
+                homeViewModel.listOfBleDevices.add(result)*/
 
-            isScanning.value = false
+                if (homeViewModel.listOfBleDevices.isNotEmpty()) {
+                    stopScanning()
+                }
+            }
         }
 
         override fun onScanFailed(errorCode: Int) {
             Timber.e("onScanFailed : code $errorCode")
-            isScanning.value = false
-
             stopBleScan()
             scanBleDevices()
         }
     }
 
+    var isAlreadyStopScanningIsCalled = false
+    private fun stopScanning(delayMillis: Long = 5000) {
+        if (homeViewModel.isScanningInProgress.value && !isAlreadyStopScanningIsCalled) {
+            Handler().postDelayed({
+                homeViewModel.isScanningInProgress.value = false
+            }, delayMillis)//delayMillis)
+        }
+
+        isAlreadyStopScanningIsCalled = true
+    }
+
 
     private fun stopBleScan() {
         bleScanner.stopScan(scanCallback)
-        isScanning.value = false
+        stopScanning()
     }
 
+
+    var listOfConnectedDevices = mutableStateListOf<BluetoothDevice>()
+    var deviceConnection: GattConnection? = null
 
     //Connect the ble devices and load the characteristics
     private suspend fun BluetoothDevice.logGattServices() {
 
-        isBleDeviceConnecting.value = true
-        val deviceConnection = GattConnection(bluetoothDevice = this@logGattServices)
+        homeViewModel.isBleDeviceConnecting.value = true
+        deviceConnection = GattConnection(
+            bluetoothDevice = this@logGattServices,
+            connectionSettings = GattConnection.ConnectionSettings(
+                autoConnect = true,
+                allowAutoConnect = true,
+                disconnectOnClose = false
+            )
+        )
 
         Timber.d("deviceConnection $deviceConnection")
 
         try {
-            deviceConnection.connect() // Suspends until connection is established
+            deviceConnection!!.connect() // Suspends until connection is established
             Timber.d("deviceConnection.connect()")
 
-            val gattServices = deviceConnection.discoverServices() // Suspends until completed
+            val gattServices = deviceConnection!!.discoverServices() // Suspends until completed
+
+            homeViewModel.isBleDeviceConnecting.value = false
 
             Timber.d("deviceConnection.discoverServices()")
 
@@ -203,7 +247,7 @@ class MainActivity : ComponentActivity() {
 
                 bluetoothGattService.characteristics.forEach { bluetoothGattCharacteristic ->
                     try {
-                        deviceConnection.readCharacteristic(bluetoothGattCharacteristic) // Suspends until characteristic is
+                        deviceConnection!!.readCharacteristic(bluetoothGattCharacteristic) // Suspends until characteristic is
 
                         /*if (it.uuid == HEART_RATE_SERVICE_UUID || it.uuid == HEART_RATE_MEASUREMENT_CHAR_UUID || it.uuid == HEART_RATE_CONTROL_POINT_CHAR_UUID) {
 
@@ -213,28 +257,34 @@ class MainActivity : ComponentActivity() {
                             )
                         }*/
 
-
                         val messageBytes: ByteArray = bluetoothGattCharacteristic.value
 
                         Timber.d("messageBytes -> $messageBytes")
 
-                        listOfCharacteristics.add(bluetoothGattCharacteristic)
-                        listOfCharacteristics.distinctBy {
+                        homeViewModel.listOfCharacteristics.add(bluetoothGattCharacteristic)
+                        homeViewModel.listOfCharacteristics.distinctBy {
                             it.uuid
                         }.let {
-                            listOfCharacteristics.clear()
-                            listOfCharacteristics.addAll(it)
+                            homeViewModel.listOfCharacteristics.clear()
+                            homeViewModel.listOfCharacteristics.addAll(it)
                         }
 
                     } catch (e: Exception) {
                         Timber.e("Couldn't read characteristic with uuid: ${bluetoothGattCharacteristic.uuid}")
+                        listOfConnectedDevices.remove(this)
                     }
                 }
             }
+
+            listOfConnectedDevices.add(homeViewModel.selectedBleDevice!!)
+        } catch (e: Exception) {
+
+            homeViewModel.isBleDeviceConnecting.value = false
         } finally {
-            deviceConnection.close() // Close when no longer used. Also triggers disconnect by default.
+
+            /*deviceConnection.close() // Close when no longer used. Also triggers disconnect by default.
             Timber.d("logGattServices close")
-            isBleDeviceConnecting.value = false
+            isBleDeviceConnecting.value = false*/
         }
     }
 

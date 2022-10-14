@@ -4,4 +4,4 @@ This app lets users scan, connect and read data from nearby BLE devices using th
 
 ## Demo
 
-![](https://github.com/gau4sar/BleAndroidApp/blob/main/ble-demo.gif)
+<img src="https://github.com/gau4sar/BleAndroidApp/blob/main/bleandroidapp.gif" width="35%" height="35%"/>
